@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tertiary Emotion Detection</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        .loader {
+            border-top-color: #3498db;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body class="bg-slate-900 text-white flex items-center justify-center min-h-screen p-4">
+
+    <div class="w-full max-w-2xl mx-auto">
+        <header class="text-center mb-8">
+            <h1 class="text-4xl font-bold text-slate-100">Tertiary Emotion Detection</h1>
+            <p class="text-slate-400 mt-2">Upload an image to analyze the facial expression and infer a complex, tertiary emotion.</p>
+        </header>
+
+        <main id="app" class="bg-slate-800 p-6 sm:p-8 rounded-2xl shadow-2xl border border-slate-700">
+            <!-- Initial state: Loading models -->
+            <div id="loading-models" class="text-center">
+                <div class="loader ease-linear rounded-full border-4 border-t-4 border-gray-200 h-12 w-12 mx-auto mb-4"></div>
+                <p class="text-lg text-slate-300">Loading AI Models...</p>
+                <p class="text-sm text-slate-500">This may take a moment.</p>
+            </div>
+
+            <!-- Upload state -->
+            <div id="upload-section" class="hidden">
+                <label for="imageUpload" class="flex flex-col items-center justify-center w-full h-64 border-2 border-slate-600 border-dashed rounded-lg cursor-pointer bg-slate-700 hover:bg-slate-600 transition-colors">
+                    <div class="flex flex-col items-center justify-center pt-5 pb-6">
+                        <svg class="w-10 h-10 mb-3 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path></svg>
+                        <p class="mb-2 text-sm text-slate-400"><span class="font-semibold">Click to upload</span> or drag and drop</p>
+                        <p class="text-xs text-slate-500">PNG, JPG, or JPEG</p>
+                    </div>
+                    <input id="imageUpload" type="file" class="hidden" accept="image/png, image/jpeg" />
+                </label>
+            </div>
+            
+            <!-- Processing state -->
+             <div id="processing-image" class="text-center hidden">
+                <div class="loader ease-linear rounded-full border-4 border-t-4 border-gray-200 h-12 w-12 mx-auto mb-4"></div>
+                <p class="text-lg text-slate-300">Analyzing Image...</p>
+            </div>
+
+            <!-- Results state -->
+            <div id="results-section" class="hidden">
+                <div class="relative w-full max-w-lg mx-auto mb-6 rounded-lg overflow-hidden shadow-lg border border-slate-700">
+                    <img id="image-display" src="" alt="Uploaded Image" class="w-full h-auto">
+                    <canvas id="canvas-overlay" class="absolute top-0 left-0"></canvas>
+                </div>
+
+                <div id="analysis-output" class="space-y-6">
+                    <!-- Tertiary Emotion -->
+                    <div class="bg-slate-700 p-5 rounded-lg text-center">
+                        <h3 class="text-sm font-medium text-slate-400 uppercase tracking-wider mb-2">Inferred Tertiary Emotion</h3>
+                        <p id="tertiary-emotion" class="text-3xl font-bold text-emerald-400">-</p>
+                    </div>
+                    
+                    <!-- Primary Emotions -->
+                    <div class="bg-slate-700 p-5 rounded-lg">
+                        <h3 class="text-sm font-medium text-slate-400 uppercase tracking-wider mb-4">Primary Emotion Analysis</h3>
+                        <div id="primary-emotions" class="space-y-2"></div>
+                    </div>
+                     <!-- No face detected -->
+                    <div id="no-face-message" class="bg-red-900/50 border border-red-700 text-red-300 p-4 rounded-lg text-center hidden">
+                        <p class="font-semibold">No face detected.</p>
+                        <p class="text-sm">Please try another image with a clear view of a face.</p>
+                    </div>
+                    <button id="reset-button" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-lg transition-colors">Analyze Another Image</button>
+                </div>
+            </div>
+        </main>
+    </div>
+
+<script>
+    // --- DOM Elements ---
+    const loadingModelsEl = document.getElementById('loading-models');
+    const uploadSectionEl = document.getElementById('upload-section');
+    const processingImageEl = document.getElementById('processing-image');
+    const resultsSectionEl = document.getElementById('results-section');
+    const imageUploadEl = document.getElementById('imageUpload');
+    const imageDisplayEl = document.getElementById('image-display');
+    const canvasOverlayEl = document.getElementById('canvas-overlay');
+    const tertiaryEmotionEl = document.getElementById('tertiary-emotion');
+    const primaryEmotionsEl = document.getElementById('primary-emotions');
+    const noFaceMessageEl = document.getElementById('no-face-message');
+    const resetButtonEl = document.getElementById('reset-button');
+
+    // --- Tertiary Emotion Mapping ---
+    // Based on the provided Python notebook. Keys are sorted alphabetically and joined.
+    const TERTIARY_EMOTIONS = {
+        'happy_surprised': 'Delight',
+        'happy_neutral': 'Contentment',
+        'disgusted_sad': 'Remorse',
+        'fearful_sad': 'Despair',
+        'angry_sad': 'Bitterness',
+        'angry_disgusted': 'Contempt',
+        'fearful_surprised': 'Awe',
+        'neutral_sad': 'Disappointment',
+        'fearful_neutral': 'Apprehension'
+    };
+
+    // --- Core Functions ---
+
+    /**
+     * Loads the face-api.js models required for detection.
+     */
+    async function loadModels() {
+        const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.12/model/';
+        await Promise.all([
+            faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
+            faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
+            faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL)
+        ]);
+        console.log("Models loaded successfully.");
+        loadingModelsEl.classList.add('hidden');
+        uploadSectionEl.classList.remove('hidden');
+    }
+
+    /**
+     * Infers a tertiary emotion from the top two primary emotion scores.
+     * @param {object} emotionScores - An object of primary emotions and their scores from face-api.
+     * @returns {string} The inferred tertiary emotion or a default message.
+     */
+    function getTertiaryEmotion(emotionScores) {
+        const sortedEmotions = Object.entries(emotionScores)
+            .sort(([, a], [, b]) => b - a);
+        
+        const topEmotion1 = sortedEmotions[0][0];
+        const topEmotion2 = sortedEmotions[1][0];
+
+        // Create a sorted key to match our dictionary
+        const key = [topEmotion1, topEmotion2].sort().join('_');
+
+        return TERTIARY_EMOTIONS[key] || 'Complex or Ambiguous Emotion';
+    }
+
+    /**
+     * Handles the image upload event, analyzes the image, and displays results.
+     * @param {Event} e - The file input change event.
+     */
+    async function handleImageUpload(e) {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        uploadSectionEl.classList.add('hidden');
+        processingImageEl.classList.remove('hidden');
+        noFaceMessageEl.classList.add('hidden');
+
+        const imageUrl = URL.createObjectURL(file);
+        imageDisplayEl.src = imageUrl;
+
+        imageDisplayEl.onload = async () => {
+            const detections = await faceapi.detectAllFaces(imageDisplayEl, new faceapi.TinyFaceDetectorOptions())
+                .withFaceLandmarks()
+                .withFaceExpressions();
+
+            processingImageEl.classList.add('hidden');
+            resultsSectionEl.classList.remove('hidden');
+
+            if (detections.length > 0) {
+                // For simplicity, we'll use the first detected face
+                const detection = detections[0];
+                const emotions = detection.expressions;
+
+                // --- Display Results ---
+                tertiaryEmotionEl.textContent = getTertiaryEmotion(emotions);
+                displayPrimaryEmotions(emotions);
+
+                // --- Draw on Canvas ---
+                const displaySize = { width: imageDisplayEl.width, height: imageDisplayEl.height };
+                faceapi.matchDimensions(canvasOverlayEl, displaySize);
+                const resizedDetections = faceapi.resizeResults(detections, displaySize);
+                
+                // Clear previous drawings
+                const ctx = canvasOverlayEl.getContext('2d');
+                ctx.clearRect(0, 0, canvasOverlayEl.width, canvasOverlayEl.height);
+
+                faceapi.draw.drawDetections(canvasOverlayEl, resizedDetections);
+                faceapi.draw.drawFaceExpressions(canvasOverlayEl, resizedDetections);
+            } else {
+                tertiaryEmotionEl.textContent = '-';
+                primaryEmotionsEl.innerHTML = '';
+                noFaceMessageEl.classList.remove('hidden');
+                 const ctx = canvasOverlayEl.getContext('2d');
+                ctx.clearRect(0, 0, canvasOverlayEl.width, canvasOverlayEl.height);
+            }
+            URL.revokeObjectURL(imageUrl); // Clean up memory
+        };
+    }
+    
+    /**
+     * Renders the primary emotion scores as progress bars.
+     * @param {object} emotions - The emotion scores object.
+     */
+    function displayPrimaryEmotions(emotions) {
+        primaryEmotionsEl.innerHTML = '';
+        Object.entries(emotions).forEach(([emotion, score]) => {
+            const percentage = (score * 100).toFixed(2);
+            const emotionEl = document.createElement('div');
+            emotionEl.className = 'flex items-center justify-between text-sm';
+            emotionEl.innerHTML = `
+                <span class="text-slate-300 w-24 capitalize">${emotion}</span>
+                <div class="w-full bg-slate-600 rounded-full h-2.5 mx-4">
+                    <div class="bg-blue-500 h-2.5 rounded-full" style="width: ${percentage}%"></div>
+                </div>
+                <span class="text-slate-400 font-mono w-16 text-right">${percentage}%</span>
+            `;
+            primaryEmotionsEl.appendChild(emotionEl);
+        });
+    }
+
+    /**
+     * Resets the UI to the initial upload state.
+     */
+    function resetUI() {
+        resultsSectionEl.classList.add('hidden');
+        uploadSectionEl.classList.remove('hidden');
+        imageUploadEl.value = ''; // Clear file input
+    }
+    
+    // --- Event Listeners ---
+    imageUploadEl.addEventListener('change', handleImageUpload);
+    resetButtonEl.addEventListener('click', resetUI);
+    
+    // --- Drag and Drop functionality ---
+    const dropZone = uploadSectionEl.querySelector('label');
+
+    dropZone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        dropZone.classList.add('bg-slate-600');
+    });
+
+    dropZone.addEventListener('dragleave', (e) => {
+        e.preventDefault();
+        dropZone.classList.remove('bg-slate-600');
+    });
+
+    dropZone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dropZone.classList.remove('bg-slate-600');
+        if (e.dataTransfer.files.length) {
+            imageUploadEl.files = e.dataTransfer.files;
+            // Manually trigger the change event
+            const event = new Event('change', { bubbles: true });
+            imageUploadEl.dispatchEvent(event);
+        }
+    });
+
+    // --- Initial Load ---
+    loadModels();
+
+</script>
+</body>
+</html>
