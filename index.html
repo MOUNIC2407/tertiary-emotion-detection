@@ -5,7 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Tertiary Emotion Detection</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -31,11 +30,11 @@
         </header>
 
         <main id="app" class="bg-slate-800 p-6 sm:p-8 rounded-2xl shadow-2xl border border-slate-700">
-            <!-- Initial state: Loading models -->
+            <!-- Initial state: Server connection check -->
             <div id="loading-models" class="text-center">
                 <div class="loader ease-linear rounded-full border-4 border-t-4 border-gray-200 h-12 w-12 mx-auto mb-4"></div>
-                <p class="text-lg text-slate-300">Loading AI Models...</p>
-                <p class="text-sm text-slate-500">This may take a moment.</p>
+                <p class="text-lg text-slate-300">Connecting to DeepFace Server...</p>
+                <p class="text-sm text-slate-500">Make sure the Python server is running.</p>
             </div>
 
             <!-- Upload state -->
@@ -60,7 +59,6 @@
             <div id="results-section" class="hidden">
                 <div class="relative w-full max-w-lg mx-auto mb-6 rounded-lg overflow-hidden shadow-lg border border-slate-700">
                     <img id="image-display" src="" alt="Uploaded Image" class="w-full h-auto">
-                    <canvas id="canvas-overlay" class="absolute top-0 left-0"></canvas>
                 </div>
 
                 <div id="analysis-output" class="space-y-6">
@@ -94,63 +92,52 @@
     const resultsSectionEl = document.getElementById('results-section');
     const imageUploadEl = document.getElementById('imageUpload');
     const imageDisplayEl = document.getElementById('image-display');
-    const canvasOverlayEl = document.getElementById('canvas-overlay');
     const tertiaryEmotionEl = document.getElementById('tertiary-emotion');
     const primaryEmotionsEl = document.getElementById('primary-emotions');
     const noFaceMessageEl = document.getElementById('no-face-message');
     const resetButtonEl = document.getElementById('reset-button');
 
-    // --- Tertiary Emotion Mapping ---
-    // Based on the provided Python notebook. Keys are sorted alphabetically and joined.
-    const TERTIARY_EMOTIONS = {
-        'happy_surprised': 'Delight',
-        'happy_neutral': 'Contentment',
-        'disgusted_sad': 'Remorse',
-        'fearful_sad': 'Despair',
-        'angry_sad': 'Bitterness',
-        'angry_disgusted': 'Contempt',
-        'fearful_surprised': 'Awe',
-        'neutral_sad': 'Disappointment',
-        'fearful_neutral': 'Apprehension'
-    };
+    // --- Configuration ---
+    const BACKEND_URL = 'http://localhost:5000';
 
     // --- Core Functions ---
 
     /**
-     * Loads the face-api.js models required for detection.
+     * Checks if the backend server is running and ready.
      */
-    async function loadModels() {
-        const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.12/model/';
-        await Promise.all([
-            faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
-            faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
-            faceapi.nets.faceExpressionNet.loadFromUri(MODEL_URL)
-        ]);
-        console.log("Models loaded successfully.");
-        loadingModelsEl.classList.add('hidden');
-        uploadSectionEl.classList.remove('hidden');
+    async function checkServerConnection() {
+        try {
+            const response = await fetch(`${BACKEND_URL}/health`);
+            if (response.ok) {
+                console.log("Backend server is running.");
+                loadingModelsEl.classList.add('hidden');
+                uploadSectionEl.classList.remove('hidden');
+            } else {
+                throw new Error('Server health check failed');
+            }
+        } catch (error) {
+            console.error("Backend server is not accessible:", error);
+            loadingModelsEl.innerHTML = `
+                <div class="text-center">
+                    <div class="text-red-400 mb-4">
+                        <svg class="w-12 h-12 mx-auto" fill="currentColor" viewBox="0 0 20 20">
+                            <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"></path>
+                        </svg>
+                    </div>
+                    <p class="text-lg text-red-300 mb-2">Backend Server Not Running</p>
+                    <p class="text-sm text-slate-400 mb-4">Please start the Python server first:</p>
+                    <code class="bg-slate-700 px-3 py-1 rounded text-green-400 text-sm">python app.py</code>
+                    <br><br>
+                    <button onclick="checkServerConnection()" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded">
+                        Retry Connection
+                    </button>
+                </div>
+            `;
+        }
     }
 
     /**
-     * Infers a tertiary emotion from the top two primary emotion scores.
-     * @param {object} emotionScores - An object of primary emotions and their scores from face-api.
-     * @returns {string} The inferred tertiary emotion or a default message.
-     */
-    function getTertiaryEmotion(emotionScores) {
-        const sortedEmotions = Object.entries(emotionScores)
-            .sort(([, a], [, b]) => b - a);
-        
-        const topEmotion1 = sortedEmotions[0][0];
-        const topEmotion2 = sortedEmotions[1][0];
-
-        // Create a sorted key to match our dictionary
-        const key = [topEmotion1, topEmotion2].sort().join('_');
-
-        return TERTIARY_EMOTIONS[key] || 'Complex or Ambiguous Emotion';
-    }
-
-    /**
-     * Handles the image upload event, analyzes the image, and displays results.
+     * Handles the image upload event, sends it to the backend for analysis.
      * @param {Event} e - The file input change event.
      */
     async function handleImageUpload(e) {
@@ -161,56 +148,65 @@
         processingImageEl.classList.remove('hidden');
         noFaceMessageEl.classList.add('hidden');
 
+        // Display the image
         const imageUrl = URL.createObjectURL(file);
         imageDisplayEl.src = imageUrl;
 
-        imageDisplayEl.onload = async () => {
-            const detections = await faceapi.detectAllFaces(imageDisplayEl, new faceapi.TinyFaceDetectorOptions())
-                .withFaceLandmarks()
-                .withFaceExpressions();
+        try {
+            // Prepare form data for backend
+            const formData = new FormData();
+            formData.append('image', file);
+
+            // Send image to backend for analysis
+            const response = await fetch(`${BACKEND_URL}/analyze`, {
+                method: 'POST',
+                body: formData
+            });
+
+            const result = await response.json();
 
             processingImageEl.classList.add('hidden');
             resultsSectionEl.classList.remove('hidden');
 
-            if (detections.length > 0) {
-                // For simplicity, we'll use the first detected face
-                const detection = detections[0];
-                const emotions = detection.expressions;
-
-                // --- Display Results ---
-                tertiaryEmotionEl.textContent = getTertiaryEmotion(emotions);
-                displayPrimaryEmotions(emotions);
-
-                // --- Draw on Canvas ---
-                const displaySize = { width: imageDisplayEl.width, height: imageDisplayEl.height };
-                faceapi.matchDimensions(canvasOverlayEl, displaySize);
-                const resizedDetections = faceapi.resizeResults(detections, displaySize);
-                
-                // Clear previous drawings
-                const ctx = canvasOverlayEl.getContext('2d');
-                ctx.clearRect(0, 0, canvasOverlayEl.width, canvasOverlayEl.height);
-
-                faceapi.draw.drawDetections(canvasOverlayEl, resizedDetections);
-                faceapi.draw.drawFaceExpressions(canvasOverlayEl, resizedDetections);
+            if (response.ok) {
+                // Display results
+                tertiaryEmotionEl.textContent = result.tertiary_emotion;
+                displayPrimaryEmotions(result.primary_emotions);
+                noFaceMessageEl.classList.add('hidden');
             } else {
+                // Handle errors (e.g., no face detected)
                 tertiaryEmotionEl.textContent = '-';
                 primaryEmotionsEl.innerHTML = '';
                 noFaceMessageEl.classList.remove('hidden');
-                 const ctx = canvasOverlayEl.getContext('2d');
-                ctx.clearRect(0, 0, canvasOverlayEl.width, canvasOverlayEl.height);
+                
+                // Show specific error message
+                const errorMsg = noFaceMessageEl.querySelector('p:first-child');
+                errorMsg.textContent = result.error || 'Analysis failed.';
             }
-            URL.revokeObjectURL(imageUrl); // Clean up memory
-        };
+        } catch (error) {
+            console.error('Error analyzing image:', error);
+            processingImageEl.classList.add('hidden');
+            resultsSectionEl.classList.remove('hidden');
+            
+            tertiaryEmotionEl.textContent = '-';
+            primaryEmotionsEl.innerHTML = '';
+            noFaceMessageEl.classList.remove('hidden');
+            
+            const errorMsg = noFaceMessageEl.querySelector('p:first-child');
+            errorMsg.textContent = 'Connection error. Please check if the server is running.';
+        }
+        
+        URL.revokeObjectURL(imageUrl); // Clean up memory
     }
     
     /**
      * Renders the primary emotion scores as progress bars.
-     * @param {object} emotions - The emotion scores object.
+     * @param {object} emotions - The emotion scores object from DeepFace.
      */
     function displayPrimaryEmotions(emotions) {
         primaryEmotionsEl.innerHTML = '';
         Object.entries(emotions).forEach(([emotion, score]) => {
-            const percentage = (score * 100).toFixed(2);
+            const percentage = score.toFixed(2);
             const emotionEl = document.createElement('div');
             emotionEl.className = 'flex items-center justify-between text-sm';
             emotionEl.innerHTML = `
@@ -262,7 +258,7 @@
     });
 
     // --- Initial Load ---
-    loadModels();
+    checkServerConnection();
 
 </script>
 </body>
